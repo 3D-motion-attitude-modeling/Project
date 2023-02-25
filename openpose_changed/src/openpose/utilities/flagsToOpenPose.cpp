@@ -298,7 +298,7 @@ namespace op
                 return std::make_pair(ProducerType::FlirCamera, String(std::to_string(flirCameraIndex)));
             // Kinect camera
             else if (type == ProducerType::KinectCamera)
-                return std::make_pair(ProducerType::kinectCamera, String(std::to_string(kinectCameraIndex)));
+                return std::make_pair(ProducerType::KinectCamera, String(std::to_string(kinectCameraIndex)));
             // Webcam
             else if (type == ProducerType::Webcam)
                 return std::make_pair(ProducerType::Webcam, String(std::to_string(webcamIndex)));

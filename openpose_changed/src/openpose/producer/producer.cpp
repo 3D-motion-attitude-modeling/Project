@@ -433,9 +433,11 @@ namespace op
                     cameraParameterPath, cameraResolution, undistortImage, std::stoi(producerString));
             // Kinect camera
             else if (producerType == ProducerType::KinectCamera)
-                 op::opLog("recognized your Flag !!!", op::Priority::High);
+            {   
+                op::opLog("recognized your Flag !!!", op::Priority::High);
                 return std::make_shared<FlirReader>(
                     cameraParameterPath, cameraResolution, undistortImage, std::stoi(producerString));
+            }
             // Webcam
             else if (producerType == ProducerType::Webcam)
             {
