@@ -201,7 +201,7 @@ namespace op
         }
     }
 
-    ProducerType flagsToProducerType(
+    ProducerType flagsToProducerType_test(
         const String& imageDirectory, const String& videoPath, const String& ipCameraPath,
         const int webcamIndex, const bool flirCamera, const bool kinectCamera)
     {
@@ -277,14 +277,14 @@ namespace op
         }
     }
 
-    std::pair<ProducerType, String> flagsToProducer(
+    std::pair<ProducerType, String> flagsToProducer_test(
         const String& imageDirectory, const String& videoPath, const String& ipCameraPath,
         const int webcamIndex, const bool flirCamera, const int flirCameraIndex, const bool kinectCamera, const int kinectCameraIndex)
     {
         try
         {
             opLog("", Priority::Low, __LINE__, __FUNCTION__, __FILE__);
-            const auto type = flagsToProducerType(
+            const auto type = flagsToProducerType_test(
                 imageDirectory, videoPath, ipCameraPath, webcamIndex, flirCamera, kinectCamera);
 
             if (type == ProducerType::ImageDirectory)

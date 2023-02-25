@@ -21,7 +21,16 @@ namespace op
     OP_API Detector flagsToDetector(const int detector);
 
     // Determine type of frame source
-    OP_API ProducerType flagsToProducerType(
+    OP_API ProducerType flagsToProducerType_test(
+        const String& imageDirectory, const String& videoPath, const String& ipCameraPath,
+        const int webcamIndex, const bool flirCamera, const bool kinectCamera);
+
+    OP_API std::pair<ProducerType, String> flagsToProducer(
+        const String& imageDirectory, const String& videoPath, const String& ipCameraPath = String(""),
+        const int webcamIndex = -1, const bool flirCamera = false, const int flirCameraIndex = -1, const bool kinectCamera = false, const int kinectCameraIndex = -1);
+
+    // Determine type of frame source
+    OP_API ProducerType flagsToProducerType_test(
         const String& imageDirectory, const String& videoPath, const String& ipCameraPath,
         const int webcamIndex, const bool flirCamera);
 

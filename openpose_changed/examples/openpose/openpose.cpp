@@ -30,7 +30,7 @@ void configureWrapper(op::Wrapper& opWrapper)
         // producerType
         op::ProducerType producerType;
         op::String producerString;
-        std::tie(producerType, producerString) = op::flagsToProducer(
+        std::tie(producerType, producerString) = op::flagsToProducer_test(
             op::String(FLAGS_image_dir), op::String(FLAGS_video), op::String(FLAGS_ip_camera), FLAGS_camera,
             FLAGS_flir_camera, FLAGS_flir_camera_index, FLAGS_kinect_camera, FLAGS_kinect_camera_index);
         // cameraSize
