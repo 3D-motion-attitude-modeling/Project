@@ -4,34 +4,37 @@
 #include <opencv2/imgproc/imgproc.hpp> // cv::undistort, cv::initUndistortRectifyMap
 #include <openpose_private/utilities/openCvMultiversionHeaders.hpp> // OPEN_CV_IS_4_OR_HIGHER
 
-# define USE_FLIR_CAMERA
-# define USE_Kinect_CAMERA
+# define USE_KINECT_CAMERA
 
 #ifdef OPEN_CV_IS_4_OR_HIGHER
     #include <opencv2/calib3d.hpp> // cv::initUndistortRectifyMap for OpenCV 4
 #endif
-#ifdef USE_Kinect_CAMERA
+#ifdef USE_KINECT_CAMERA
     #include <k4a/k4a.h>
+    #include "MultiDeviceCapturer.h"
 #endif
 
 #include <openpose/3d/cameraParameterReader.hpp>
 
 namespace op
 {
-    #ifdef USE_FLIR_CAMERA
+    #ifdef USE_KINECT_CAMERA
 
         // 获取全部相机的序列号
-        std::vector<std::string> getSerialNumbers(const std::vector<k4a::device> devices,
+        std::vector<std::string> getSerialNumbers(const std::vector<std::uint32_t>& device_indices,
                                                   const bool sorted)
         {
             try
             {
                 // Get strSerialNumbers
-                std::vector<std::string> serialNumbers(devices.size());
+                std::vector<std::string> serialNumbers(device_indices.size());
+                k4a::device deviceHandle;
 
                 for (auto i = 0u; i < serialNumbers.size(); i++)
-                {
-                    serialNumbers[i] = devices[i].get_serialnum();
+                {   
+                    deviceHandle = k4a::device::open(device_indices[i]);
+                    serialNumbers[i] = deviceHandle.get_serialnum();
+                    deviceHandle.close(); // release the handle by closing the device
                 }
 
                 // Sort serial numbers
@@ -66,7 +69,7 @@ namespace op
         }
 
         // k4a主从相机的配置函数    
-        static k4a_device_configuration_t get_default_config()
+        k4a_device_configuration_t get_default_config()
         {
             k4a_device_configuration_t camera_config = K4A_DEVICE_CONFIG_INIT_DISABLE_ALL;
             camera_config.color_format = K4A_IMAGE_FORMAT_COLOR_BGRA32;
@@ -79,7 +82,7 @@ namespace op
         }
 
         // Master customizable settings ———— k4a主从相机的配置函数
-        static k4a_device_configuration_t get_master_config()
+        k4a_device_configuration_t get_master_config()
         {
             k4a_device_configuration_t camera_config = get_default_config();
             camera_config.wired_sync_mode = K4A_WIRED_SYNC_MODE_MASTER;
@@ -95,7 +98,7 @@ namespace op
         }
 
         // Subordinate customizable settings ———— k4a主从相机的配置函数
-        static k4a_device_configuration_t get_subordinate_config()
+        k4a_device_configuration_t get_subordinate_config()
         {
             k4a_device_configuration_t camera_config = get_default_config();
             camera_config.wired_sync_mode = K4A_WIRED_SYNC_MODE_SUBORDINATE;
@@ -115,16 +118,18 @@ namespace op
     #endif
 
     // PIMPL idiom 结构体的实现
-    struct SpinnakerWrapper::Implk4aWrapper
+    struct KinectWrapper::ImplKinectWrapper
     {
-        #ifdef USE_FLIR_CAMERA
+        #ifdef USE_KINECT_CAMERA
             bool mInitialized;
             CameraParameterReader mCameraParameterReader;
             Point<int> mResolution;
 
             std::vector<std::uint32_t> device_indices;
+            MultiDeviceCapturer multiCapturer;               // 用于管理多相机的类, 负责开启和关闭设备与相, 获取同步图像
             std::vector<cv::Mat> mCvMats;
             std::vector<std::string> mSerialNumbers;
+            k4a_device_configuration_t main_config, secondary_config;
 
             // Camera index
             const int mCameraIndex;
@@ -142,7 +147,7 @@ namespace op
             std::thread mThread;
 
             // 构造函数
-            Implk4aWrapper(const bool undistortImage, const int cameraIndex) :
+            ImplKinectWrapper(const bool undistortImage, const int cameraIndex) :
                 mInitialized{false},
                 mCameraIndex{cameraIndex},
                 mUndistortImage{undistortImage}
@@ -157,7 +162,7 @@ namespace op
                 {
                     // k4a to cv::Mat
                     const auto cvMatDistorted = color_to_opencv(imagePtr);
-                    // const auto cvMatDistorted = spinnakerWrapperToCvMat(imagePtr);
+                    // const auto cvMatDistorted = KinectWrapperToCvMat(imagePtr);
                     // Undistort
                     if (mUndistortImage)
                     {
@@ -214,46 +219,33 @@ namespace op
 
             void bufferingThread()
             {
-                #ifdef USE_FLIR_CAMERA
+                #ifdef USE_KINECT_CAMERA
                     try
                     {
                         mCloseThread = false;
-                        // Get cameras - ~0.005 ms (3 cameras)
-                        std::vector<k4a::device> cameraPtrs(device_indices.GetSize()); // 为当前连接的相机构造一个指针向量组
-
-                        for (auto i = 0u; i < cameraPtrs.size(); i++)
-                            cameraPtrs.at(i) = mCameraList.GetBySerial(mSerialNumbers.at(i)); // Sorted by Serial Number //根据序列号为指针赋值
-                            // cameraPtrs.at(i) = mCameraList.GetByIndex(i); // Sorted by however Spinnaker decided
 
                         while (!mCloseThread)
                         {
                             // Trigger
-                            for (auto i = 0u; i < cameraPtrs.size(); i++)
-                            {
-                                // Retrieve GenICam nodemap
-                                auto& iNodeMap = cameraPtrs[i]->GetNodeMap(); //获取每个相机的 GenICam 节点映射
-
-                                Spinnaker::GenApi::CEnumerationPtr ptrAcquisitionMode = iNodeMap.GetNode("AcquisitionMode");
-
-                                const auto result = GrabNextImageByTrigger(iNodeMap); //采集图像
-                                if (result != 0)
-                                    error("Error in GrabNextImageByTrigger.", __LINE__, __FUNCTION__, __FILE__);
-                            }
+                            vector<k4a::capture> captures = capturer.get_synchronized_captures(secondary_config);
 
                             // Get frame
-                            std::vector<Spinnaker::ImagePtr> imagePtrs(cameraPtrs.size());
-                            for (auto i = 0u; i < cameraPtrs.size(); i++)
-                                imagePtrs.at(i) = cameraPtrs.at(i)->GetNextImage();
+                            std::vector<k4a::image> imagePtrs(captures.size());
+                            for (auto i = 0u; i < captures.size(); i++)
+                                imagePtrs.at(i) = captures.at(i)->get_color_image();
+
+                            // release captures
+                            for (auto& capture : captures)
+                                capture.reset();
 
                             // Move to buffer
                             bool imagesExtracted = true;
                             // 检查每个相机获取的图像是否完整
                             for (auto& imagePtr : imagePtrs)
                             {
-                                if (imagePtr->IsIncomplete())
+                                if (!imagePtr->is_valid())
                                 {
-                                    opLog("Image incomplete with image status " + std::to_string(imagePtr->GetImageStatus())
-                                        + "...", Priority::High, __LINE__, __FUNCTION__, __FILE__);
+                                    opLog("Image incomplete" + "...", Priority::High, __LINE__, __FUNCTION__, __FILE__);
                                     imagesExtracted = false;
                                     break;
                                 }
@@ -332,10 +324,9 @@ namespace op
                     bool imagesExtracted = true;
                     for (auto& imagePtr : imagePtrs)
                     {
-                        if (imagePtr->is_valid())
+                        if (!imagePtr->is_valid())
                         {
-                            opLog("Image incomplete with image status " + std::to_string(imagePtr->GetImageStatus())
-                                + "...", Priority::High, __LINE__, __FUNCTION__, __FILE__);
+                            opLog("Image incomplete" + "...", Priority::High, __LINE__, __FUNCTION__, __FILE__);
                             imagesExtracted = false;
                             break;
                         }
@@ -372,7 +363,7 @@ namespace op
                                 for (auto i = 0u; i < threads.size(); i++)
                                 {
                                     // Multi-thread option
-                                    threads.at(i) = std::thread{&Implk4aWrapper::readAndUndistortImage, this, i,
+                                    threads.at(i) = std::thread{&ImplKinectWrapper::readAndUndistortImage, this, i,
                                                                 imagePtrs.at(i), cameraIntrinsics.at(i),
                                                                 cameraDistorsions.at(i)};
                                     // // Single-thread option
@@ -430,13 +421,13 @@ namespace op
         #endif
     };
 
-    SpinnakerWrapper::SpinnakerWrapper(const std::string& cameraParameterPath, const Point<int>& resolution,
+    KinectWrapper::KinectWrapper(const std::string& cameraParameterPath, const Point<int>& resolution,
                                        const bool undistortImage, const int cameraIndex)
-        #ifdef USE_FLIR_CAMERA
-            : upImpl{new Implk4aWrapper{undistortImage, cameraIndex}}
+        #ifdef USE_KINECT_CAMERA
+            : upImpl{new ImplKinectWrapper{undistortImage, cameraIndex}}
         #endif
     {
-        #ifdef USE_FLIR_CAMERA
+        #ifdef USE_KINECT_CAMERA
             try
             {
                 // Clean previous unclosed builds (e.g., if core dumped in the previous code using the cameras)
@@ -447,207 +438,44 @@ namespace op
                 // Print application build information
                 opLog(std::string{ "Application build date: " } + __DATE__ + " " + __TIME__, Priority::High);
 
-                // Retrieve singleton reference to upImpl->mSystemPtr object
-                // 在 Spinnaker SDK 中，System 类是整个相机系统的入口点，提供了对相机系统的全局控制。
-                upImpl->mSystemPtr = Spinnaker::System::GetInstance();  
-
-                // Retrieve list of cameras from the upImpl->mSystemPtr
-                upImpl->mCameraList = upImpl->mSystemPtr->GetCameras();
-
-                const unsigned int numCameras = upImpl->mCameraList.GetSize();
-
+                // 获取当前系统中的相机数量
+                const unsigned int numCameras = k4a::device::get_installed_count();
                 opLog("Number of cameras detected: " + std::to_string(numCameras), Priority::High);
+                for (auto i = 0u; i < numCameras; i++)
+                {
+                    upImpl->device_indices.emplace_back(i);
+                }
 
                 // Finish if there are no cameras
                 if (numCameras == 0)
                 {
                     // Clear camera list before releasing upImpl->mSystemPtr
-                    upImpl->mCameraList.Clear();
-
-                    // Release upImpl->mSystemPtr
-                    upImpl->mSystemPtr->ReleaseInstance();
-
-                    // opLog("Not enough cameras!\nPress Enter to exit...", Priority::High);
-                    // getchar();
+                    upImpl->device_indices.Clear();
 
                     error("No cameras detected.", __LINE__, __FUNCTION__, __FILE__);
                 }
+
                 opLog("Camera system initialized...", Priority::High);
 
-                //
-                // Retrieve transport layer nodemaps and print device information for
-                // each camera
-                //
-                // *** NOTES ***
-                // This example retrieves information from the transport layer nodemap
-                // twice: once to print device information and once to grab the device
-                // serial number. Rather than caching the nodemap, each nodemap is
-                // retrieved both times as needed.
-                //
-                opLog("\n*** DEVICE INFORMATION ***\n", Priority::High);
+                // 开启设备
+                upImpl->multiCapturer(device_indices, color_exposure_usec, powerline_freq);
 
-                // 打印设备信息
-                for (auto i = 0; i < upImpl->mCameraList.GetSize(); i++)
+                // 相机设备初始化配置
+                k4a_device_configuration_t upImpl->main_config = get_master_config();
+                if (numCameras == 1) // no need to have a master cable if it's standalone
                 {
-                    // Select camera
-                    auto cameraPtr = upImpl->mCameraList.GetByIndex(i);
-
-                    // Retrieve TL device nodemap
-                    auto& iNodeMapTLDevice = cameraPtr->GetTLDeviceNodeMap();
-
-                    // Print device information
-                    auto result = printDeviceInfo(iNodeMapTLDevice, i);
-                    if (result < 0)
-                        error("Result > 0, error " + std::to_string(result) + " occurred...",
-                                  __LINE__, __FUNCTION__, __FILE__);
+                    upImpl->main_config.wired_sync_mode = K4A_WIRED_SYNC_MODE_STANDALONE;
                 }
+                k4a_device_configuration_t upImpl->subordinate_config = get_subordinate_config();
 
-                // 初始化相机，并设置触发模式
-                for (auto i = 0; i < upImpl->mCameraList.GetSize(); i++)
-                {
-                    // Select camera
-                    auto cameraPtr = upImpl->mCameraList.GetByIndex(i);
-
-                    // Initialize each camera
-                    // You may notice that the steps in this function have more loops with
-                    // less steps per loop; this contrasts the acquireImages() function
-                    // which has less loops but more steps per loop. This is done for
-                    // demonstrative purposes as both work equally well.
-                    // Later: Each camera needs to be deinitialized once all images have been
-                    // acquired.
-                    cameraPtr->Init();
-
-                    // Retrieve GenICam nodemap
-                    auto& iNodeMap = cameraPtr->GetNodeMap();
-
-                    // Configure trigger
-                    int result = configureTrigger(iNodeMap);
-                    if (result < 0)
-                        error("Result > 0, error " + std::to_string(result) + " occurred...",
-                                  __LINE__, __FUNCTION__, __FILE__);
-
-                    // // Configure chunk data
-                    // result = configureChunkData(iNodeMap);
-                    // if (result < 0)
-                    //     return result;
-
-                    // // Remove buffer --> Always get newest frame
-                    // Spinnaker::GenApi::INodeMap& snodeMap = cameraPtr->GetTLStreamNodeMap();
-                    // Spinnaker::GenApi::CEnumerationPtr ptrBufferHandlingMode = snodeMap.GetNode(
-                    //     "StreamBufferHandlingMode");
-                    // if (!Spinnaker::GenApi::IsAvailable(ptrBufferHandlingMode)
-                    //     || !Spinnaker::GenApi::IsWritable(ptrBufferHandlingMode))
-                    //     error("Unable to change buffer handling mode", __LINE__, __FUNCTION__, __FILE__);
-
-                    // Spinnaker::GenApi::CEnumEntryPtr ptrBufferHandlingModeNewest = ptrBufferHandlingMode->GetEntryByName(
-                    //     "NewestFirstOverwrite");
-                    // if (!Spinnaker::GenApi::IsAvailable(ptrBufferHandlingModeNewest)
-                    //     || !IsReadable(ptrBufferHandlingModeNewest))
-                    //     error("Unable to set buffer handling mode to newest (entry 'NewestFirstOverwrite' retrieval)."
-                    //               " Aborting...", __LINE__, __FUNCTION__, __FILE__);
-                    // int64_t bufferHandlingModeNewest = ptrBufferHandlingModeNewest->GetValue();
-
-                    // ptrBufferHandlingMode->SetIntValue(bufferHandlingModeNewest);
-                }
-
-                // Prepare each camera to acquire images
-                //
-                // *** NOTES ***    
-                // For pseudo-simultaneous streaming（伪并行流）, each camera is prepared as if it
-                // were just one, but in a loop. Notice that cameras are selected with
-                // an index. We demonstrate pseduo-simultaneous streaming because true
-                // simultaneous streaming would require multiple process or threads,
-                // which is too complex for an example.
-                //
-                // Serial numbers are the only persistent objects we gather in this
-                // example, which is why a std::vector is created.
-
-                //设置相机的采集模式与分辨率
-                for (auto i = 0; i < upImpl->mCameraList.GetSize(); i++)
-                {
-                    // Select camera
-                    auto cameraPtr = upImpl->mCameraList.GetByIndex(i);
-
-                    /**************************************************************************************/
-
-                    // Set acquisition mode to continuous
-                    // 在这种模式下，相机会持续地采集图像，而不需要外部的触发信号。这与其他模式，比如单帧模式（single frame mode）或者触发模式（trigger mode）相对应。
-                    Spinnaker::GenApi::CEnumerationPtr ptrAcquisitionMode = cameraPtr->GetNodeMap().GetNode(
-                        "AcquisitionMode");
-
-                    if (!Spinnaker::GenApi::IsAvailable(ptrAcquisitionMode)
-                        || !Spinnaker::GenApi::IsWritable(ptrAcquisitionMode))
-                        error("Unable to set acquisition mode to continuous (node retrieval; camera "
-                              + std::to_string(i) + "). Aborting...", __LINE__, __FUNCTION__, __FILE__);
-
-                    Spinnaker::GenApi::CEnumEntryPtr ptrAcquisitionModeContinuous = ptrAcquisitionMode->GetEntryByName(
-                        "Continuous");
-                    if (!Spinnaker::GenApi::IsAvailable(ptrAcquisitionModeContinuous)
-                        || !Spinnaker::GenApi::IsReadable(ptrAcquisitionModeContinuous))
-                        error("Unable to set acquisition mode to continuous (entry 'continuous' retrieval "
-                                  + std::to_string(i) + "). Aborting...", __LINE__, __FUNCTION__, __FILE__);
-
-                    const int64_t acquisitionModeContinuous = ptrAcquisitionModeContinuous->GetValue();
-
-                    ptrAcquisitionMode->SetIntValue(acquisitionModeContinuous);
-
-                    opLog("Camera " + std::to_string(i) + " acquisition mode set to continuous...", Priority::High);
-
-                    /**************************************************************************************/
-
-                    // Set camera resolution
-                    // Retrieve GenICam nodemap
-                    auto& iNodeMap = cameraPtr->GetNodeMap();
-                    // Set offset
-                    Spinnaker::GenApi::CIntegerPtr ptrOffsetX = iNodeMap.GetNode("OffsetX");
-                    ptrOffsetX->SetValue(0);
-                    Spinnaker::GenApi::CIntegerPtr ptrOffsetY = iNodeMap.GetNode("OffsetY");
-                    ptrOffsetY->SetValue(0);
-                    // Set resolution
-                    if (resolution.x > 0 && resolution.y > 0)
-                    {
-                        // WARNING: setting the obset would require auto-change in the camera matrix parameters
-                        // Set offset
-                        // const Spinnaker::GenApi::CIntegerPtr ptrWidthMax = iNodeMap.GetNode("WidthMax");
-                        // const Spinnaker::GenApi::CIntegerPtr ptrHeightMax = iNodeMap.GetNode("HeightMax");
-                        // ptrOffsetX->SetValue((ptrWidthMax->GetValue() - resolution.x) / 2);
-                        // ptrOffsetY->SetValue((ptrHeightMax->GetValue() - resolution.y) / 2);
-                        // Set Width
-                        Spinnaker::GenApi::CIntegerPtr ptrWidth = iNodeMap.GetNode("Width");
-                        ptrWidth->SetValue(resolution.x);
-                        // Set width
-                        Spinnaker::GenApi::CIntegerPtr ptrHeight = iNodeMap.GetNode("Height");
-                        ptrHeight->SetValue(resolution.y);
-                    }
-                    else
-                    {
-                        // 获取相机的最大分辨率（即最大画幅）
-                        const Spinnaker::GenApi::CIntegerPtr ptrWidthMax = iNodeMap.GetNode("WidthMax");
-                        const Spinnaker::GenApi::CIntegerPtr ptrHeightMax = iNodeMap.GetNode("HeightMax");
-                        // Set Width
-                        Spinnaker::GenApi::CIntegerPtr ptrWidth = iNodeMap.GetNode("Width");
-                        ptrWidth->SetValue(ptrWidthMax->GetValue());
-                        // Set width
-                        Spinnaker::GenApi::CIntegerPtr ptrHeight = iNodeMap.GetNode("Height");
-                        ptrHeight->SetValue(ptrHeightMax->GetValue());
-                        opLog("Choosing maximum resolution for flir camera (" + std::to_string(ptrWidth->GetValue())
-                            + " x " + std::to_string(ptrHeight->GetValue()) + ").", Priority::High);
-                    }
-
-                    /**************************************************************************************/
-
-                    // Begin acquiring images
-                    cameraPtr->BeginAcquisition();
-
-                    opLog("Camera " + std::to_string(i) + " started acquiring images...", Priority::High);
-                }
-
+                // 开启相机
+                upImpl->multiCapturer.startCameras(upImpl->main_config, upImpl->secondary_config);
+                
                 //打印相机序列号信息
-                // Retrieve device serial number for filename
                 opLog("\nReading (and sorting by) serial numbers...", Priority::High);
                 const bool sorted = true;
-                upImpl->mSerialNumbers = getSerialNumbers(upImpl->mCameraList, sorted);
-                const auto& serialNumbers = upImpl->mSerialNumbers;
+                upImpl->mSerialNumbers = getSerialNumbers(upImpl->device_indices, sorted);
+                const auto& serialuNmbers = upImpl->mSerialNumbers;
                 for (auto i = 0u; i < serialNumbers.size(); i++)
                     opLog("Camera " + std::to_string(i) + " serial number set to "
                         + serialNumbers[i] + "...", Priority::High);
@@ -674,7 +502,7 @@ namespace op
 
                 // Start buffering thread
                 upImpl->mThreadOpened = true;
-                upImpl->mThread = std::thread{&SpinnakerWrapper::Implk4aWrapper::bufferingThread, this->upImpl};
+                upImpl->mThread = std::thread{&KinectWrapper::ImplKinectWrapper::bufferingThread, this->upImpl};
 
                 // Get resolution
                 const auto cvMats = getRawFrames();
@@ -688,7 +516,7 @@ namespace op
                 opLog("\nRunning for " + numberCameras + " out of " + std::to_string(serialNumbers.size())
                     + " camera(s)...\n\n*** IMAGE ACQUISITION ***\n", Priority::High);
             }
-            catch (const Spinnaker::Exception& e)
+            catch (const k4a::error& e)
             {
                 error(e.what(), __LINE__, __FUNCTION__, __FILE__);
             }
@@ -705,7 +533,7 @@ namespace op
         #endif
     }
 
-    SpinnakerWrapper::~SpinnakerWrapper()
+    KinectWrapper::~KinectWrapper()
     {
         try
         {
@@ -717,16 +545,16 @@ namespace op
         }
     }
 
-    std::vector<Matrix> SpinnakerWrapper::getRawFrames()
+    std::vector<Matrix> KinectWrapper::getRawFrames()
     {
         try
         {
-            #ifdef USE_FLIR_CAMERA
+            #ifdef USE_KINECT_CAMERA
                 try
                 {
                     // Sanity check
                     if (upImpl->mUndistortImage &&
-                        (unsigned long long) upImpl->mCameraList.GetSize()
+                        (unsigned long long) upImpl->device_indices.GetSize()
                             != upImpl->mCameraParameterReader.getNumberCameras())
                         error("The number of cameras must be the same as the INTRINSICS vector size.",
                           __LINE__, __FUNCTION__, __FILE__);
@@ -735,7 +563,7 @@ namespace op
                                                  upImpl->mCameraParameterReader.getCameraDistortions(),
                                                  upImpl->mCameraIndex);
                 }
-                catch (const Spinnaker::Exception& e)
+                catch (const k4a::error& e)
                 {
                     error(e.what(), __LINE__, __FUNCTION__, __FILE__);
                     return {};
@@ -752,11 +580,11 @@ namespace op
         }
     }
 
-    std::vector<Matrix> SpinnakerWrapper::getCameraMatrices() const
+    std::vector<Matrix> KinectWrapper::getCameraMatrices() const
     {
         try
         {
-            #ifdef USE_FLIR_CAMERA
+            #ifdef USE_KINECT_CAMERA
                 return upImpl->mCameraParameterReader.getCameraMatrices();
             #else
                 return {};
@@ -769,11 +597,11 @@ namespace op
         }
     }
 
-    std::vector<Matrix> SpinnakerWrapper::getCameraExtrinsics() const
+    std::vector<Matrix> KinectWrapper::getCameraExtrinsics() const
     {
         try
         {
-            #ifdef USE_FLIR_CAMERA
+            #ifdef USE_KINECT_CAMERA
                 return upImpl->mCameraParameterReader.getCameraExtrinsics();
             #else
                 return {};
@@ -786,11 +614,11 @@ namespace op
         }
     }
 
-    std::vector<Matrix> SpinnakerWrapper::getCameraIntrinsics() const
+    std::vector<Matrix> KinectWrapper::getCameraIntrinsics() const
     {
         try
         {
-            #ifdef USE_FLIR_CAMERA
+            #ifdef USE_KINECT_CAMERA
                 return upImpl->mCameraParameterReader.getCameraIntrinsics();
             #else
                 return {};
@@ -803,11 +631,11 @@ namespace op
         }
     }
 
-    Point<int> SpinnakerWrapper::getResolution() const
+    Point<int> KinectWrapper::getResolution() const
     {
         try
         {
-            #ifdef USE_FLIR_CAMERA
+            #ifdef USE_KINECT_CAMERA
                 return upImpl->mResolution;
             #else
                 return Point<int>{};
@@ -820,11 +648,11 @@ namespace op
         }
     }
 
-    bool SpinnakerWrapper::isOpened() const
+    bool KinectWrapper::isOpened() const
     {
         try
         {
-            #ifdef USE_FLIR_CAMERA
+            #ifdef USE_KINECT_CAMERA
                 return upImpl->mInitialized;
             #else
                 return false;
@@ -837,9 +665,9 @@ namespace op
         }
     }
 
-    void SpinnakerWrapper::release()
+    void KinectWrapper::release()
     {
-        #ifdef USE_FLIR_CAMERA
+        #ifdef USE_KINECT_CAMERA
             try
             {
                 if (upImpl->mInitialized)
@@ -852,47 +680,9 @@ namespace op
                         upImpl->mThread.join();
                     }
 
-                    // End acquisition for each camera
-                    // Notice that what is usually a one-step process is now two steps
-                    // because of the additional step of selecting the camera. It is worth
-                    // repeating that camera selection needs to be done once per loop.
-                    // It is possible to interact with cameras through the camera list with
-                    // GetByIndex(); this is an alternative to retrieving cameras as
-                    // Spinnaker::CameraPtr objects that can be quick and easy for small tasks.
-                    //
-                    for (auto i = 0; i < upImpl->mCameraList.GetSize(); i++)
-                    {
-                        // Select camera
-                        auto cameraPtr = upImpl->mCameraList.GetByIndex(i);
-
-                        cameraPtr->EndAcquisition();
-
-                        // Retrieve GenICam nodemap
-                        auto& iNodeMap = cameraPtr->GetNodeMap();
-
-                        // // Disable chunk data
-                        // result = disableChunkData(iNodeMap);
-                        // // if (result < 0)
-                        // //     return result;
-
-                        // Reset trigger
-                        auto result = resetTrigger(iNodeMap);
-                        if (result < 0)
-                            error("Error happened..." + std::to_string(result), __LINE__, __FUNCTION__, __FILE__);
-
-                        // Deinitialize each camera
-                        // Each camera must be deinitialized separately by first
-                        // selecting the camera and then deinitializing it.
-                        cameraPtr->DeInit();
-                    }
+                    upImpl->multiCapturer.stopCameras();
 
                     opLog("FLIR (Point-grey) capture completed. Releasing cameras...", Priority::High);
-
-                    // Clear camera list before releasing upImpl->mSystemPtr
-                    upImpl->mCameraList.Clear();
-
-                    // Release upImpl->mSystemPtr
-                    upImpl->mSystemPtr->ReleaseInstance();
 
                     // Setting the class as released
                     upImpl->mInitialized = false;
@@ -901,29 +691,31 @@ namespace op
                 }
                 else
                 {
-                    // Open general system
-                    auto systemPtr = Spinnaker::System::GetInstance();
-                    auto cameraList = systemPtr->GetCameras();
-                    if (cameraList.GetSize() > 0)
-                    {
+                    const unsigned int numCameras = k4a::device::get_installed_count();
 
-                        for (auto i = 0; i < cameraList.GetSize(); i++)
-                        {
-                            // Select camera
-                            auto cameraPtr = cameraList.GetByIndex(i);
-                            // Begin
-                            cameraPtr->Init();
-                            cameraPtr->BeginAcquisition();
-                            // End
-                            cameraPtr->EndAcquisition();
-                            cameraPtr->DeInit();
-                        }
+                    for (auto i = 0u; i < numCameras; i++)
+                    {
+                        upImpl->device_indices.emplace_back(i);
                     }
-                    cameraList.Clear();
-                    systemPtr->ReleaseInstance();
+
+                    upImpl->multiCapturer(device_indices, color_exposure_usec, powerline_freq);
+
+                    // Create configurations for devices
+                    k4a_device_configuration_t upImpl->main_config = get_master_config();
+                    if (numCameras == 1) // no need to have a master cable if it's standalone
+                    {
+                        upImpl->main_config.wired_sync_mode = K4A_WIRED_SYNC_MODE_STANDALONE;
+                    }
+                    k4a_device_configuration_t upImpl->subordinate_config = get_subordinate_config();
+
+                    upImpl->multiCapturer.startCameras(upImpl->main_config, upImpl->secondary_config);
+
+                    upImpl->multiCapturer.stopCameras();
+
+                    opLog("Cameras released! Exiting program.", Priority::High);
                 }
             }
-            catch (const Spinnaker::Exception& e)
+            catch (const k4a::error& e)
             {
                 error(e.what(), __LINE__, __FUNCTION__, __FILE__);
             }

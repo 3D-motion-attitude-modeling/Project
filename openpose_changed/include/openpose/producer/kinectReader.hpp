@@ -16,6 +16,7 @@ namespace op
         // cameraParametersPath is like 'models/cameraParameters/flir/'
         // 是否去畸变--undistortImage, 摄像头编号--cameraIndex（-1表示所有摄像头一同同步读取）
         // eplicit 指定构造函数或转换函数为显式, 即它不能用于隐式转换和复制初始化
+        // const Point<int>& cameraResolution Kinect相机分辨率不能随便设置
         explicit KinectReader(const std::string& cameraParametersPath, const Point<int>& cameraResolution,
                             const bool undistortImage = true, const int cameraIndex = -1);
 
