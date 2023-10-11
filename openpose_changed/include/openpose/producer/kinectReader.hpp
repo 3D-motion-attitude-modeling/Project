@@ -3,6 +3,7 @@
 
 #include <openpose/core/common.hpp>
 #include <openpose/producer/producer.hpp>
+#include <openpose/producer/kinectWrapper.hpp>
 
 namespace op
 {
@@ -40,6 +41,9 @@ namespace op
         void set(const int capProperty, const double value);
 
     private:
+        //辅助实现的类
+        KinectWrapper mKinectWrapper;
+
         // 保留
         Point<int> mResolution;
         unsigned long long mFrameNameCounter;

@@ -8,13 +8,13 @@ namespace op
     KinectReader::KinectReader(const std::string& cameraParameterPath, const Point<int>& cameraResolution,
                            const bool undistortImage, const int cameraIndex) :
         Producer{ProducerType::KinectCamera, cameraParameterPath, undistortImage, -1},
+        mKinectWrapper{cameraParameterPath, cameraResolution, undistortImage, cameraIndex},
         mFrameNameCounter{0ull}
     {
         try
         {
             // Get resolution
-            // const auto resolution = mSpinnakerWrapper.getResolution();
-
+            const auto resolution = mKinectWrapper.getResolution();
             // Set resolution
             set(CV_CAP_PROP_FRAME_WIDTH, resolution.x);
             set(CV_CAP_PROP_FRAME_HEIGHT, resolution.y);
@@ -41,7 +41,7 @@ namespace op
     {
         try
         {
-            return mSpinnakerWrapper.getCameraMatrices();
+            return mKinectWrapper.getCameraMatrices();
         }
         catch (const std::exception& e)
         {
@@ -54,7 +54,7 @@ namespace op
     {
         try
         {
-            // return mSpinnakerWrapper.getCameraExtrinsics();
+            return mKinectWrapper.getCameraExtrinsics();
         }
         catch (const std::exception& e)
         {
@@ -67,7 +67,7 @@ namespace op
     {
         try
         {
-            // return mSpinnakerWrapper.getCameraIntrinsics();
+            return mKinectWrapper.getCameraIntrinsics();
         }
         catch (const std::exception& e)
         {
@@ -94,7 +94,7 @@ namespace op
     {
         try
         {
-            // return mSpinnakerWrapper.isOpened();
+            return mKinectWrapper.isOpened();
         }
         catch (const std::exception& e)
         {
@@ -107,7 +107,7 @@ namespace op
     {
         try
         {
-            // mSpinnakerWrapper.release();
+            mKinectWrapper.release();
         }
         catch (const std::exception& e)
         {
@@ -119,7 +119,7 @@ namespace op
     {
         try
         {
-            // return mSpinnakerWrapper.getRawFrames().at(0);
+            return mKinectWrapper.getRawFrames().at(0);
         }
         catch (const std::exception& e)
         {
@@ -133,7 +133,7 @@ namespace op
         try
         {
             mFrameNameCounter++; // Simple counter: 0,1,2,3,...
-            // return mSpinnakerWrapper.getRawFrames();
+            return mKinectWrapper.getRawFrames();
         }
         catch (const std::exception& e)
         {
