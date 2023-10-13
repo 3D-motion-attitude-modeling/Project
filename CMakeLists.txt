@@ -470,6 +470,16 @@ if (UNIX OR APPLE)
     endif (NOT SPINNAKER_FOUND)
   endif (WITH_FLIR_CAMERA)
 
+  if (WITH_KINECT_CAMERA)
+  # Azure Kinect SDK
+  find_package(k4a REQUIRED)
+    if (NOT k4a_FOUND)
+      message(FATAL_ERROR "Azure Kinect SDK not found. Either turn off the `WITH_AZURE_KINECT` option or specify the path to
+        the Azure Kinect SDK includes and libs.")
+    endif (NOT k4a_FOUND)
+  endif (WITH_KINECT_CAMERA)
+
+
   if (WITH_3D_ADAM_MODEL)
     if (NOT WITH_3D_RENDERER)
       message(FATAL_ERROR "WITH_3D_RENDERER is required if WITH_3D_ADAM_MODEL is enabled.")
@@ -635,6 +645,16 @@ if (WIN32)
     find_library(SPINNAKER_LIB spinnaker_v140 HINTS ${FIND_LIB_PREFIX}/spinnaker/lib)
   endif (WITH_FLIR_CAMERA)
 
+  # we don't use the Azure Kinect SDK in windows
+  # if (WITH_KINECT_CAMERA)
+  #   find_library(K4A_LIB k4a HINTS /usr/local/lib)
+  #   if (NOT K4A_LIB)
+  #       message(FATAL_ERROR "Azure Kinect SDK library not found. Either turn off the `WITH_AZURE_KINECT` option or specify the path to
+  #           the Azure Kinect SDK library.")
+  #   endif (NOT K4A_LIB)
+  # endif (WITH_KINECT_CAMERA)
+
+
   set(Caffe_LIBS_RELEASE "${Caffe_LIB_RELEASE};${Caffe_Proto_LIB_RELEASE}")
   set(Caffe_LIBS_DEBUG "${Caffe_LIB_DEBUG};${Caffe_Proto_LIB_DEBUG}")
   set(OpenCV_INCLUDE_DIRS "3rdparty/windows/opencv/include")
@@ -661,6 +681,12 @@ if (WIN32)
   if (WITH_FLIR_CAMERA)
     set(SPINNAKER_INCLUDE_DIRS "3rdparty/windows/spinnaker/include")
   endif (WITH_FLIR_CAMERA)
+
+  # we don't use the Azure Kinect SDK in windows
+  # if (WITH_KINECT_CAMERA)
+  #   set(K4A_INCLUDE_DIRS "/usr/include/k4a")
+  # endif (WITH_KINECT_CAMERA)
+
 
   set(Caffe_FOUND 1)
 
@@ -703,6 +729,8 @@ if (WIN32)
       file(GLOB SPINNAKER_DLL "${CMAKE_SOURCE_DIR}/3rdparty/windows/spinnaker/bin/*")
       file(COPY ${SPINNAKER_DLL} DESTINATION ${BIN_FOLDER})
     endif (WITH_FLIR_CAMERA)
+
+    # we don't use the Azure Kinect SDK in windows
 
   endif (BUILD_BIN_FOLDER)
 
@@ -909,6 +937,11 @@ if (WITH_FLIR_CAMERA)
   include_directories(SYSTEM ${SPINNAKER_INCLUDE_DIRS}) # To remove its warnings, equiv. to -isystem
 endif (WITH_FLIR_CAMERA)
 
+if (WITH_KINECT_CAMERA)
+    include_directories(SYSTEM ${K4A_INCLUDE_DIRS})
+endif (WITH_KINECT_CAMERA)
+
+
 if (WITH_3D_ADAM_MODEL)
                                     include_directories(include/adam) # TODO: TEMPORARY - TO BE REMOVED IN THE FUTURE
   include_directories(${CERES_INCLUDE_DIRS})
@@ -983,6 +1016,10 @@ endif (WITH_CERES)
 if (WITH_FLIR_CAMERA)
   set(OpenPose_3rdparty_libraries ${OpenPose_3rdparty_libraries} ${SPINNAKER_LIB})
 endif (WITH_FLIR_CAMERA)
+
+if (WITH_KINECT_CAMERA)
+    set(OpenPose_3rdparty_libraries ${OpenPose_3rdparty_libraries} ${K4A_LIB})
+endif (WITH_KINECT_CAMERA)
 
 # Pthread
 if (UNIX OR APPLE)
